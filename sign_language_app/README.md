@@ -27,6 +27,31 @@ python -m sign_language_app.trainer
 ```
 4. Model is saved to `sign_language_app/models/asl_model.pkl`.
 
+## Use Kaggle ASL Fingerspelling data
+This trainer now supports converting the Kaggle competition files used in:
+`https://www.kaggle.com/code/gusthema/asl-fingerspelling-recognition-w-tensorflow`
+
+Expected Kaggle folder layout:
+- `<kaggle_root>/train.csv`
+- `<kaggle_root>/train_landmarks/*.parquet`
+
+Convert and train in one step:
+```bash
+python -m sign_language_app.trainer \
+	--kaggle-root /path/to/asl-fingerspelling \
+	--kaggle-output-csv data/kaggle_landmarks.csv \
+	--model-output sign_language_app/models/asl_model.pkl
+```
+
+Convert only (no training):
+```bash
+python -m sign_language_app.trainer \
+	--kaggle-root /path/to/asl-fingerspelling \
+	--build-only
+```
+
+Note: This converter extracts a static hand-pose feature per sequence (median hand landmarks), so it is useful as a bootstrap dataset for the current static classifier.
+
 ## Notes
 - If `asl_model.pkl` is not present, the app falls back to heuristic recognition for core commands and several words/letters.
 - Reference icons and `asl_chart.png` are auto-generated at startup if missing.

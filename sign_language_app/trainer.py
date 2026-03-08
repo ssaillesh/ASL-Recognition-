@@ -1,17 +1,38 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import pickle
+import re
+from collections import Counter
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import cv2
 import mediapipe as mp
 import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
+
+from sign_language_app.classifier import WORD_LABELS
+
+
+POSE_SELECTED_IDS = [13, 15, 17, 19, 21, 14, 16, 18, 20, 22]
+
+
+def kaggle_selected_columns() -> List[str]:
+    cols: List[str] = []
+    for axis in ("x", "y", "z"):
+        for side in ("right", "left"):
+            for idx in range(21):
+                cols.append(f"{axis}_{side}_hand_{idx}")
+        for idx in POSE_SELECTED_IDS:
+            cols.append(f"{axis}_pose_{idx}")
+    return cols
 
 
 @dataclass
@@ -74,6 +95,147 @@ class LandmarkCollector:
         cv2.destroyAllWindows()
 
 
+def _normalize_points(points: np.ndarray) -> Optional[np.ndarray]:
+    if points.shape != (21, 2):
+        return None
+
+    if not np.isfinite(points).all():
+        return None
+
+    wrist_x, wrist_y = points[0]
+    translated = points - np.array([wrist_x, wrist_y], dtype=np.float32)
+    max_norm = np.max(np.linalg.norm(translated, axis=1))
+    if max_norm <= 0:
+        return None
+
+    translated = translated / max_norm
+    return translated.flatten().astype(np.float32)
+
+
+def _sort_landmark_columns(columns: Iterable[str]) -> List[str]:
+    def _index(name: str) -> int:
+        match = re.search(r"(\d+)$", name)
+        return int(match.group(1)) if match else 10_000
+
+    return sorted(columns, key=_index)
+
+
+def _hand_axis_columns(columns: Sequence[str], axis: str, side: str) -> List[str]:
+    strict_prefix = f"{axis}_{side}_hand_"
+    strict = [col for col in columns if col.startswith(strict_prefix)]
+    if strict:
+        return _sort_landmark_columns(strict)
+
+    # Fallback for alternate naming conventions.
+    loose = [col for col in columns if col.startswith(f"{axis}_") and f"_{side}_hand_" in col]
+    return _sort_landmark_columns(loose)
+
+
+def _extract_sequence_feature(sequence_df: pd.DataFrame) -> Optional[np.ndarray]:
+    cols = list(sequence_df.columns)
+
+    best_points: Optional[np.ndarray] = None
+    best_score = -1
+
+    for side in ("right", "left"):
+        x_cols = _hand_axis_columns(cols, "x", side)
+        y_cols = _hand_axis_columns(cols, "y", side)
+
+        if len(x_cols) < 21 or len(y_cols) < 21:
+            continue
+
+        x_cols = x_cols[:21]
+        y_cols = y_cols[:21]
+
+        x_vals = sequence_df[x_cols].to_numpy(dtype=np.float32)
+        y_vals = sequence_df[y_cols].to_numpy(dtype=np.float32)
+
+        valid_score = int(np.isfinite(x_vals).sum() + np.isfinite(y_vals).sum())
+        if valid_score <= best_score:
+            continue
+
+        x_med = np.nanmedian(x_vals, axis=0)
+        y_med = np.nanmedian(y_vals, axis=0)
+        points = np.stack([x_med, y_med], axis=1)
+
+        best_points = points
+        best_score = valid_score
+
+    if best_points is None:
+        return None
+
+    return _normalize_points(best_points)
+
+
+def _map_phrase_to_label(phrase: str) -> Optional[str]:
+    cleaned = phrase.strip().upper()
+
+    if len(cleaned) == 1 and "A" <= cleaned <= "Z":
+        return cleaned
+
+    if cleaned in WORD_LABELS:
+        return cleaned
+
+    return None
+
+
+def build_dataset_from_kaggle(
+    kaggle_root: str,
+    output_csv: str,
+    max_samples_per_label: int = 600,
+) -> None:
+    train_csv = os.path.join(kaggle_root, "train.csv")
+    landmarks_dir = os.path.join(kaggle_root, "train_landmarks")
+
+    if not os.path.exists(train_csv):
+        raise FileNotFoundError(f"Missing train.csv at {train_csv}")
+    if not os.path.isdir(landmarks_dir):
+        raise FileNotFoundError(f"Missing train_landmarks directory at {landmarks_dir}")
+
+    meta = pd.read_csv(train_csv)
+    if "sequence_id" not in meta.columns or "phrase" not in meta.columns:
+        raise ValueError("train.csv must contain sequence_id and phrase columns")
+
+    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+    label_counts: Counter[str] = Counter()
+    written = 0
+    expected_cols = set(kaggle_selected_columns())
+
+    with open(output_csv, "w", newline="") as handle:
+        writer = csv.writer(handle)
+
+        for row in meta.itertuples(index=False):
+            label = _map_phrase_to_label(str(row.phrase))
+            if not label:
+                continue
+            if label_counts[label] >= max_samples_per_label:
+                continue
+
+            sequence_id = str(row.sequence_id)
+            parquet_path = os.path.join(landmarks_dir, f"{sequence_id}.parquet")
+            if not os.path.exists(parquet_path):
+                continue
+
+            # Use the exact Kaggle-style selected columns when available.
+            parquet_cols = list(pq.read_schema(parquet_path).names)
+            use_cols = [c for c in parquet_cols if c in expected_cols]
+            seq_df = pd.read_parquet(parquet_path, columns=use_cols if use_cols else None)
+            feature = _extract_sequence_feature(seq_df)
+            if feature is None:
+                continue
+
+            writer.writerow([label] + feature.tolist())
+            label_counts[label] += 1
+            written += 1
+
+            if written % 500 == 0:
+                print(f"Converted {written} samples...")
+
+    print(f"Saved converted dataset to {output_csv}")
+    print(f"Total samples: {written}")
+    print(f"Per-label counts: {dict(sorted(label_counts.items()))}")
+
+
 def train_model(config: TrainingConfig) -> None:
     labels = []
     vectors = []
@@ -103,6 +265,24 @@ def train_model(config: TrainingConfig) -> None:
 
 
 if __name__ == "__main__":
-    default_csv = os.path.join("data", "landmarks.csv")
-    default_model = os.path.join("models", "asl_model.pkl")
-    train_model(TrainingConfig(dataset_csv=default_csv, model_output=default_model))
+    parser = argparse.ArgumentParser(description="Train ASL model from landmark CSV or Kaggle Fingerspelling data")
+    parser.add_argument("--dataset-csv", default=os.path.join("data", "landmarks.csv"))
+    parser.add_argument("--model-output", default=os.path.join("models", "asl_model.pkl"))
+    parser.add_argument("--kaggle-root", default="", help="Path containing train.csv and train_landmarks/")
+    parser.add_argument("--kaggle-output-csv", default=os.path.join("data", "kaggle_landmarks.csv"))
+    parser.add_argument("--max-samples-per-label", type=int, default=600)
+    parser.add_argument("--build-only", action="store_true", help="Only convert Kaggle dataset without training")
+    args = parser.parse_args()
+
+    dataset_csv = args.dataset_csv
+
+    if args.kaggle_root:
+        build_dataset_from_kaggle(
+            kaggle_root=args.kaggle_root,
+            output_csv=args.kaggle_output_csv,
+            max_samples_per_label=args.max_samples_per_label,
+        )
+        dataset_csv = args.kaggle_output_csv
+
+    if not args.build_only:
+        train_model(TrainingConfig(dataset_csv=dataset_csv, model_output=args.model_output))

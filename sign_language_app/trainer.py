@@ -16,7 +16,8 @@ import pandas as pd
 import pyarrow.parquet as pq
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.cluster import MiniBatchKMeans
 
 from sign_language_app.classifier import WORD_LABELS
 
@@ -39,6 +40,83 @@ def kaggle_selected_columns() -> List[str]:
 class TrainingConfig:
     dataset_csv: str
     model_output: str
+
+
+def _load_csv_dataset(dataset_csv: str) -> Tuple[np.ndarray, np.ndarray]:
+    labels = []
+    vectors = []
+
+    with open(dataset_csv, "r", newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            labels.append(row[0])
+            vectors.append([float(v) for v in row[1:]])
+
+    X = np.array(vectors, dtype=np.float32)
+    y = np.array(labels)
+    return X, y
+
+
+def _infer_landmark_channels(feature_count: int) -> int:
+    if feature_count == 42:
+        return 2
+    if feature_count == 63:
+        return 3
+    raise ValueError(
+        f"Unsupported feature width {feature_count}. Expected 42 (21x2) or 63 (21x3)."
+    )
+
+
+def _normalize_landmark_tensor(sample: np.ndarray) -> np.ndarray:
+    """Match runtime normalization: wrist-relative, scaled by max landmark norm."""
+    if sample.shape[0] != 21:
+        return sample
+
+    wrist = sample[0:1, :]
+    translated = sample - wrist
+    norms = np.linalg.norm(translated, axis=1)
+    max_norm = float(np.max(norms)) if norms.size else 0.0
+    if max_norm > 0.0:
+        translated = translated / max_norm
+    return translated.astype(np.float32)
+
+
+def _build_train_test_split(
+    X: np.ndarray,
+    y: np.ndarray,
+    split_strategy: str,
+    test_size: float,
+    random_state: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if split_strategy == "random":
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=y,
+        )
+        return X_train, X_test, y_train, y_test
+
+    if split_strategy != "group-similarity":
+        raise ValueError(f"Unsupported split strategy: {split_strategy}")
+
+    # Build pseudo-groups by clustering each class; this prevents very similar samples
+    # from being split between train/test and reduces optimistic leakage.
+    groups = np.zeros(len(y), dtype=np.int32)
+    offset = 0
+    labels = np.unique(y)
+    for label in labels:
+        idx = np.where(y == label)[0]
+        k = max(5, min(40, len(idx) // 20))
+        km = MiniBatchKMeans(n_clusters=k, random_state=random_state, batch_size=256, n_init="auto")
+        g = km.fit_predict(X[idx])
+        groups[idx] = g + offset
+        offset += k
+
+    splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+    train_idx, test_idx = next(splitter.split(X, y, groups=groups))
+    return X[train_idx], X[test_idx], y[train_idx], y[test_idx]
 
 
 class LandmarkCollector:
@@ -236,20 +314,16 @@ def build_dataset_from_kaggle(
     print(f"Per-label counts: {dict(sorted(label_counts.items()))}")
 
 
-def train_model(config: TrainingConfig) -> None:
-    labels = []
-    vectors = []
+def train_model(config: TrainingConfig, split_strategy: str = "random") -> None:
+    X, y = _load_csv_dataset(config.dataset_csv)
 
-    with open(config.dataset_csv, "r", newline="") as handle:
-        reader = csv.reader(handle)
-        for row in reader:
-            labels.append(row[0])
-            vectors.append([float(v) for v in row[1:]])
-
-    X = np.array(vectors, dtype=np.float32)
-    y = np.array(labels)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = _build_train_test_split(
+        X,
+        y,
+        split_strategy=split_strategy,
+        test_size=0.2,
+        random_state=42,
+    )
 
     model = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
@@ -264,10 +338,18 @@ def train_model(config: TrainingConfig) -> None:
     print(f"Saved model to {config.model_output}")
 
 
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train ASL model from landmark CSV or Kaggle Fingerspelling data")
     parser.add_argument("--dataset-csv", default=os.path.join("data", "landmarks.csv"))
     parser.add_argument("--model-output", default=os.path.join("models", "asl_model.pkl"))
+    parser.add_argument("--model-type", choices=["rf", "cnn1d"], default="rf")
+    parser.add_argument("--epochs", type=int, default=80)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--split-strategy", choices=["random", "group-similarity"], default="random")
     parser.add_argument("--kaggle-root", default="", help="Path containing train.csv and train_landmarks/")
     parser.add_argument("--kaggle-output-csv", default=os.path.join("data", "kaggle_landmarks.csv"))
     parser.add_argument("--max-samples-per-label", type=int, default=600)
@@ -285,4 +367,15 @@ if __name__ == "__main__":
         dataset_csv = args.kaggle_output_csv
 
     if not args.build_only:
-        train_model(TrainingConfig(dataset_csv=dataset_csv, model_output=args.model_output))
+        config = TrainingConfig(dataset_csv=dataset_csv, model_output=args.model_output)
+        if args.model_type == "cnn1d":
+            from sign_language_app.cnn.trainer import train_cnn_model
+            train_cnn_model(
+                config,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                split_strategy=args.split_strategy,
+            )
+        else:
+            train_model(config, split_strategy=args.split_strategy)

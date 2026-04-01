@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import os
 import queue
 import threading
@@ -22,7 +23,7 @@ class CameraPanel(ttk.Frame):
         self.on_label = on_label
         self.engine = GestureEngine()
         self.classifier = ASLClassifier(model_path)
-        self.builder = SentenceBuilder(confidence_threshold=0.5, hold_seconds=0.5)
+        self.builder = SentenceBuilder(confidence_threshold=0.62, hold_seconds=0.5)
 
         self.classify_every = 2
         self.frame_index = 0
@@ -30,6 +31,7 @@ class CameraPanel(ttk.Frame):
         self._latest_image = None
         self._current_prediction = PredictionResult(label="", confidence=0.0, top3=[])
         self._last_label: Optional[str] = None
+        self._prediction_window = deque(maxlen=7)
 
         self.in_queue: queue.Queue = queue.Queue(maxsize=2)
         self.out_queue: queue.Queue = queue.Queue(maxsize=2)
@@ -83,8 +85,33 @@ class CameraPanel(ttk.Frame):
         try:
             while True:
                 self._current_prediction = self.out_queue.get_nowait()
+                self._prediction_window.append(self._current_prediction)
         except queue.Empty:
             return
+
+    def _smoothed_prediction(self) -> PredictionResult:
+        if not self._prediction_window:
+            return self._current_prediction
+
+        score_by_label = {}
+        top3_by_label = {}
+        for pred in self._prediction_window:
+            if not pred.label:
+                continue
+            score_by_label[pred.label] = score_by_label.get(pred.label, 0.0) + float(pred.confidence)
+            for name, score in pred.top3:
+                top3_by_label[name] = top3_by_label.get(name, 0.0) + float(score)
+
+        if not score_by_label:
+            return self._current_prediction
+
+        ranked = sorted(score_by_label.items(), key=lambda item: item[1], reverse=True)
+        label, score_sum = ranked[0]
+        confidence = score_sum / max(1, len(self._prediction_window))
+
+        ranked_top3 = sorted(top3_by_label.items(), key=lambda item: item[1], reverse=True)[:3]
+        normalized_top3 = [(name, score / max(1, len(self._prediction_window))) for name, score in ranked_top3]
+        return PredictionResult(label=label, confidence=confidence, top3=normalized_top3)
 
     def _draw_overlay(self, frame, fps: float) -> None:
         p = self._current_prediction
@@ -118,18 +145,19 @@ class CameraPanel(ttk.Frame):
             self._push_for_classification(feature_vector, landmarks)
 
         self._poll_prediction()
+        stable_prediction = self._smoothed_prediction()
 
-        state = self.builder.update(self._current_prediction.label, self._current_prediction.confidence)
+        state = self.builder.update(stable_prediction.label, stable_prediction.confidence)
 
-        if self.on_label and self._current_prediction.label != self._last_label:
-            self.on_label(self._current_prediction.label)
-            self._last_label = self._current_prediction.label
+        if self.on_label and stable_prediction.label != self._last_label:
+            self.on_label(stable_prediction.label)
+            self._last_label = stable_prediction.label
 
         self.gesture_var.set(
-            f"Detected: {self._current_prediction.label or '--'} ({int(self._current_prediction.confidence * 100)}%)"
+            f"Detected: {stable_prediction.label or '--'} ({int(stable_prediction.confidence * 100)}%)"
         )
         self.sentence_var.set(f"Sentence: {state.sentence}")
-        self._update_confidence_meter(self._current_prediction)
+        self._update_confidence_meter(stable_prediction)
 
         fps = cast(float, payload["fps"])
         self._draw_overlay(frame, fps)

@@ -6,3 +6,5 @@ pyttsx3>=2.90
 Pillow>=10.0.0
 pandas>=2.0.0
 pyarrow>=15.0.0
+tensorflow>=2.14.0; platform_system != "Darwin"
+tensorflow-macos>=2.14.0; platform_system == "Darwin"

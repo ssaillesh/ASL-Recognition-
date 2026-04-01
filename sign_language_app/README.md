@@ -27,6 +27,32 @@ python -m sign_language_app.trainer
 ```
 4. Model is saved to `sign_language_app/models/asl_model.pkl`.
 
+### Train Option A: Landmark-based 1D-CNN
+This mode treats each sample as a landmark tensor (`21x2` or `21x3`) and applies a small Conv1D network across landmark index.
+
+Key setup:
+- Train/test split: `80/20` (`test_size=0.2`, `stratify=True`, `random_state=42`)
+- Validation split (inside training set): `0.1`
+- Epochs: configurable via `--epochs` (default `80`) with early stopping (`patience=8`)
+- Split strategy: `random` (default) or `group-similarity` to reduce near-duplicate leakage
+
+Command:
+```bash
+python -m sign_language_app.trainer \
+	--dataset-csv data/landmarks_from_public_kaggle.csv \
+	--model-output sign_language_app/models/asl_model.pkl \
+	--model-type cnn1d \
+	--split-strategy group-similarity \
+	--epochs 80 \
+	--batch-size 64 \
+	--learning-rate 0.001
+```
+
+Notes:
+- The `.pkl` output is a wrapper with metadata plus a `.keras` model path.
+- The app classifier auto-detects this wrapper and runs CNN inference if TensorFlow is installed.
+- CSV feature width must be `42` (`21x2`) or `63` (`21x3`).
+
 ## Use Kaggle ASL Fingerspelling data
 This trainer now supports converting the Kaggle competition files used in:
 `https://www.kaggle.com/code/gusthema/asl-fingerspelling-recognition-w-tensorflow`

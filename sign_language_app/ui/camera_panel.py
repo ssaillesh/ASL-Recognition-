@@ -22,7 +22,7 @@ class CameraPanel(ttk.Frame):
         self.on_label = on_label
         self.engine = GestureEngine()
         self.classifier = ASLClassifier(model_path)
-        self.builder = SentenceBuilder(confidence_threshold=0.8, hold_seconds=0.8)
+        self.builder = SentenceBuilder(confidence_threshold=0.5, hold_seconds=0.5)
 
         self.classify_every = 2
         self.frame_index = 0

@@ -114,6 +114,7 @@ class ASLClassifier:
         if self.model is None:
             return self._heuristic_predict(points)
 
+        # Get model predictions
         probabilities = self.model.predict_proba([feature_vector])[0]
         indices = np.argsort(probabilities)[::-1][:3]
 
@@ -121,6 +122,14 @@ class ASLClassifier:
         if self.label_encoder is not None:
             labels = self.label_encoder.inverse_transform(labels.astype(int))
 
-        top3: List[Tuple[str, float]] = [(str(labels[idx]), float(probabilities[idx])) for idx in indices]
-        label, confidence = top3[0]
-        return PredictionResult(label=label, confidence=confidence, top3=top3)
+        top3_model: List[Tuple[str, float]] = [(str(labels[idx]), float(probabilities[idx])) for idx in indices]
+        
+        # If model confidence is too low, try heuristic as well
+        if top3_model[0][1] < 0.5:
+            heuristic_result = self._heuristic_predict(points)
+            # If heuristic has better confidence, use it
+            if heuristic_result.confidence >= top3_model[0][1]:
+                return heuristic_result
+        
+        label, confidence = top3_model[0]
+        return PredictionResult(label=label, confidence=confidence, top3=top3_model)

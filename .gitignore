@@ -1,0 +1,8 @@
+# Python cache and virtual env
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# macOS
+.DS_Store

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import List, Sequence, Tuple
 
 import numpy as np
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CNNClassifier:
@@ -21,6 +25,7 @@ class CNNClassifier:
         self.model = None
         self.classes: List[str] = []
         self.input_shape: Tuple[int, int] | None = None
+        self.debug_enabled = os.environ.get("ASL_DEBUG_CNN", "0") == "1"
         self._load_model(model_path)
 
     def _load_model(self, model_path: str) -> None:
@@ -82,8 +87,20 @@ class CNNClassifier:
         if channels <= 0 or len(feature_vector) % channels != 0:
             return ("UNKNOWN", 0.0, [("UNKNOWN", 0.0)])
 
-        # Reshape for CNN: (1, 21, channels)
-        sample = feature_vector.reshape(1, len(feature_vector) // channels, channels)
+        landmark_count = len(feature_vector) // channels
+        sample = feature_vector.reshape(1, landmark_count, channels)
+
+        if self.debug_enabled:
+            LOGGER.info(
+                "cnn_predict shape=%s channels=%d min=%.4f max=%.4f mean=%.4f first8=%s",
+                tuple(sample.shape),
+                channels,
+                float(np.min(feature_vector)),
+                float(np.max(feature_vector)),
+                float(np.mean(feature_vector)),
+                np.asarray(feature_vector[:8]).round(4).tolist(),
+            )
+
         probabilities = self.model.predict(sample, verbose=0)[0]
         indices = np.argsort(probabilities)[::-1][:3]
 

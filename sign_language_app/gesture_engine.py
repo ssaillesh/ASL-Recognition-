@@ -7,6 +7,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+from sign_language_app.preprocessing import normalize_landmarks_xy
+
 Point = Tuple[float, float]
 
 
@@ -34,14 +36,7 @@ class GestureEngine:
         self.hands.close()
 
     def _normalized_landmarks(self, points: List[Point]) -> np.ndarray:
-        wrist_x, wrist_y = points[0]
-        translated = np.array([[x - wrist_x, y - wrist_y] for x, y in points], dtype=np.float32)
-
-        max_norm = np.max(np.linalg.norm(translated, axis=1))
-        if max_norm > 0:
-            translated /= max_norm
-
-        return translated.flatten()
+        return normalize_landmarks_xy(points)
 
     def _fingertip_colors(self, idx: int) -> Tuple[int, int, int]:
         colors = {

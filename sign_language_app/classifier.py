@@ -68,6 +68,24 @@ class ASLClassifier:
         mcp_y = points[mcp][1]
         return tip_y < pip_y < mcp_y
 
+    @staticmethod
+    def _thumb_folded(points: Sequence[Tuple[float, float]]) -> bool:
+        thumb_tip = points[4]
+        thumb_ip = points[3]
+        wrist = points[0]
+        thumb_tip_dist = float(np.hypot(thumb_tip[0] - wrist[0], thumb_tip[1] - wrist[1]))
+        thumb_ip_dist = float(np.hypot(thumb_ip[0] - wrist[0], thumb_ip[1] - wrist[1]))
+        return thumb_tip_dist <= thumb_ip_dist * 1.08
+
+    @staticmethod
+    def _thumb_open(points: Sequence[Tuple[float, float]]) -> bool:
+        thumb_tip = points[4]
+        thumb_ip = points[3]
+        wrist = points[0]
+        thumb_tip_dist = float(np.hypot(thumb_tip[0] - wrist[0], thumb_tip[1] - wrist[1]))
+        thumb_ip_dist = float(np.hypot(thumb_ip[0] - wrist[0], thumb_ip[1] - wrist[1]))
+        return thumb_tip_dist > thumb_ip_dist * 1.10
+
     def _heuristic_predict(self, points: Sequence[Tuple[float, float]]) -> PredictionResult:
         index_ext = self._finger_extended(points, 8, 6, 5)
         middle_ext = self._finger_extended(points, 12, 10, 9)
@@ -141,6 +159,41 @@ class ASLClassifier:
         calibrated = sorted(base.items(), key=lambda item: item[1], reverse=True)[:3]
         return [(label, float(score)) for label, score in calibrated]
 
+    def _calibrate_ab(
+        self,
+        points: Sequence[Tuple[float, float]],
+        top3: List[Tuple[str, float]],
+    ) -> List[Tuple[str, float]]:
+        labels = [label for label, _ in top3]
+        if not any(label in {"A", "B"} for label in labels):
+            return top3
+
+        index_ext = self._finger_extended(points, 8, 6, 5)
+        middle_ext = self._finger_extended(points, 12, 10, 9)
+        ring_ext = self._finger_extended(points, 16, 14, 13)
+        pinky_ext = self._finger_extended(points, 20, 18, 17)
+        thumb_folded = self._thumb_folded(points)
+
+        scores = {"A": 0.0, "B": 0.0}
+
+        if not index_ext and not middle_ext and not ring_ext and not pinky_ext and thumb_folded:
+            scores["A"] += 1.0
+
+        if index_ext and middle_ext and ring_ext and pinky_ext and thumb_folded:
+            scores["B"] += 1.0
+
+        if max(scores.values()) < 0.85:
+            return top3
+
+        base = dict(top3)
+        for label in ("A", "B"):
+            if label not in base:
+                base[label] = 0.0
+            base[label] += scores[label] * 0.4
+
+        calibrated = sorted(base.items(), key=lambda item: item[1], reverse=True)[:3]
+        return [(label, float(score)) for label, score in calibrated]
+
     def predict(self, feature_vector: np.ndarray, points: Sequence[Tuple[float, float]]) -> PredictionResult:
         if self.model is None and self.cnn_classifier is None:
             return self._heuristic_predict(points)
@@ -149,6 +202,7 @@ class ASLClassifier:
             # Use the dedicated CNN classifier
             label, confidence, top3_model = self.cnn_classifier.predict(feature_vector)
             
+            top3_model = self._calibrate_ab(points, top3_model)
             # Apply U/V/R calibration
             top3_model = self._calibrate_uvr(points, top3_model)
 
@@ -170,6 +224,7 @@ class ASLClassifier:
             labels = self.label_encoder.inverse_transform(labels.astype(int))
 
         top3_model: List[Tuple[str, float]] = [(str(labels[idx]), float(probabilities[idx])) for idx in indices]
+        top3_model = self._calibrate_ab(points, top3_model)
         top3_model = self._calibrate_uvr(points, top3_model)
 
         # Reject unstable low-confidence outputs instead of forcing a wrong letter.

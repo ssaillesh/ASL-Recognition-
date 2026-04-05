@@ -20,6 +20,10 @@ from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.cluster import MiniBatchKMeans
 
 from sign_language_app.classifier import WORD_LABELS
+from sign_language_app.preprocessing import (
+    infer_landmark_channels,
+    normalize_landmark_tensor,
+)
 
 
 POSE_SELECTED_IDS = [13, 15, 17, 19, 21, 14, 16, 18, 20, 22]
@@ -58,27 +62,13 @@ def _load_csv_dataset(dataset_csv: str) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _infer_landmark_channels(feature_count: int) -> int:
-    if feature_count == 42:
-        return 2
-    if feature_count == 63:
-        return 3
-    raise ValueError(
-        f"Unsupported feature width {feature_count}. Expected 42 (21x2) or 63 (21x3)."
-    )
+    # Backward-compatible wrapper for existing imports.
+    return infer_landmark_channels(feature_count)
 
 
 def _normalize_landmark_tensor(sample: np.ndarray) -> np.ndarray:
-    """Match runtime normalization: wrist-relative, scaled by max landmark norm."""
-    if sample.shape[0] != 21:
-        return sample
-
-    wrist = sample[0:1, :]
-    translated = sample - wrist
-    norms = np.linalg.norm(translated, axis=1)
-    max_norm = float(np.max(norms)) if norms.size else 0.0
-    if max_norm > 0.0:
-        translated = translated / max_norm
-    return translated.astype(np.float32)
+    # Backward-compatible wrapper for existing imports.
+    return normalize_landmark_tensor(sample)
 
 
 def _build_train_test_split(
@@ -180,13 +170,10 @@ def _normalize_points(points: np.ndarray) -> Optional[np.ndarray]:
     if not np.isfinite(points).all():
         return None
 
-    wrist_x, wrist_y = points[0]
-    translated = points - np.array([wrist_x, wrist_y], dtype=np.float32)
-    max_norm = np.max(np.linalg.norm(translated, axis=1))
-    if max_norm <= 0:
+    translated = normalize_landmark_tensor(points)
+    if float(np.max(np.linalg.norm(translated, axis=1))) <= 0:
         return None
 
-    translated = translated / max_norm
     return translated.flatten().astype(np.float32)
 
 

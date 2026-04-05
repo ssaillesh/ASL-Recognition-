@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -8,36 +9,6 @@ from sign_language_app.assets_bootstrap import ensure_assets
 from sign_language_app.ui.camera_panel import CameraPanel
 from sign_language_app.ui.practice_mode import PracticeModePanel
 from sign_language_app.ui.reference_panel import ReferencePanel
-
-
-class WelcomeDialog(tk.Toplevel):
-    def __init__(self, parent: tk.Tk) -> None:
-        super().__init__(parent)
-        self.title("Welcome")
-        self.geometry("680x360")
-        self.configure(bg="#101316")
-        self.transient(parent)
-        self.grab_set()
-
-        title = tk.Label(
-            self,
-            text="ASL Recognition App",
-            font=("Helvetica", 26, "bold"),
-            fg="#f8f8f8",
-            bg="#101316",
-        )
-        title.pack(pady=(24, 10))
-
-        body = (
-            "1. Keep one hand visible and centered in frame.\n"
-            "2. Hold a gesture for about 0.8 seconds to confirm.\n"
-            "3. Open palm inserts SPACE. Closed fist for 2 seconds clears sentence.\n"
-            "4. Thumbs up triggers text-to-speech for the current sentence.\n"
-            "5. Press Quit to close the app cleanly."
-        )
-        tk.Label(self, text=body, justify=tk.LEFT, font=("Helvetica", 14), fg="#e3e3e3", bg="#101316").pack(padx=24, pady=8)
-
-        tk.Button(self, text="Start", font=("Helvetica", 14, "bold"), command=self.destroy, bg="#f0cd4c", fg="#111111").pack(pady=18)
 
 
 class App(tk.Tk):
@@ -94,9 +65,13 @@ class App(tk.Tk):
 
 
 def main() -> None:
+    if os.environ.get("ASL_DEBUG_RT", "0") == "1" or os.environ.get("ASL_DEBUG_CNN", "0") == "1":
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+
     app = App()
-    dialog = WelcomeDialog(app)
-    app.wait_window(dialog)
     app.mainloop()
 
 

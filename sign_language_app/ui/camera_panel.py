@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+import logging
 import os
 import queue
 import threading
@@ -14,7 +15,11 @@ from PIL import Image, ImageTk
 
 from sign_language_app.classifier import ASLClassifier, PredictionResult
 from sign_language_app.gesture_engine import GestureEngine
+from sign_language_app.preprocessing import feature_stats
 from sign_language_app.sentence_builder import SentenceBuilder
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CameraPanel(ttk.Frame):
@@ -24,6 +29,16 @@ class CameraPanel(ttk.Frame):
         self.engine = GestureEngine()
         self.classifier = ASLClassifier(model_path)
         self.builder = SentenceBuilder(confidence_threshold=0.62, hold_seconds=0.5)
+        self.debug_runtime = os.environ.get("ASL_DEBUG_RT", "0") == "1"
+        self.save_uncertain = os.environ.get("ASL_SAVE_UNCERTAIN_FRAMES", "0") == "1"
+        self._last_debug_frame = -999
+
+        if self.save_uncertain:
+            root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.debug_frame_dir = os.path.join(root_dir, "debug_frames")
+            os.makedirs(self.debug_frame_dir, exist_ok=True)
+        else:
+            self.debug_frame_dir = ""
 
         self.classify_every = 2
         self.frame_index = 0
@@ -32,6 +47,7 @@ class CameraPanel(ttk.Frame):
         self._current_prediction = PredictionResult(label="", confidence=0.0, top3=[])
         self._last_label: Optional[str] = None
         self._prediction_window = deque(maxlen=7)
+        self._landmark_history = deque(maxlen=12)
 
         self.in_queue: queue.Queue = queue.Queue(maxsize=2)
         self.out_queue: queue.Queue = queue.Queue(maxsize=2)
@@ -113,6 +129,38 @@ class CameraPanel(ttk.Frame):
         normalized_top3 = [(name, score / max(1, len(self._prediction_window))) for name, score in ranked_top3]
         return PredictionResult(label=label, confidence=confidence, top3=normalized_top3)
 
+    def _motion_jz_override(self) -> Optional[PredictionResult]:
+        if len(self._landmark_history) < 8:
+            return None
+
+        points = [np.asarray(sample[8], dtype=np.float32) for sample in self._landmark_history if sample is not None and len(sample) > 8]
+        if len(points) < 8:
+            return None
+
+        traj = np.asarray(points, dtype=np.float32)
+        diffs = np.diff(traj, axis=0)
+        if diffs.size == 0:
+            return None
+
+        path_len = float(np.sum(np.linalg.norm(diffs, axis=1)))
+        net = traj[-1] - traj[0]
+        dx = diffs[:, 0]
+        dy = diffs[:, 1]
+
+        sign_changes = int(np.sum(np.sign(dx[:-1]) != np.sign(dx[1:]))) if len(dx) > 2 else 0
+        vertical_drop = float(net[1])
+        horizontal_move = float(abs(net[0]))
+
+        # Z: zig-zag path with noticeable horizontal direction changes.
+        if path_len > 0.14 and sign_changes >= 2 and horizontal_move > 0.03 and float(np.max(np.abs(dx))) > 0.01:
+            return PredictionResult(label="Z", confidence=0.86, top3=[("Z", 0.86), ("UNKNOWN", 0.14)])
+
+        # J: downward hook-like motion. Webcam is mirrored, so be tolerant to direction.
+        if path_len > 0.12 and vertical_drop > 0.04 and horizontal_move > 0.01:
+            return PredictionResult(label="J", confidence=0.84, top3=[("J", 0.84), ("UNKNOWN", 0.16)])
+
+        return None
+
     def _draw_overlay(self, frame, fps: float) -> None:
         p = self._current_prediction
         label = p.label or "--"
@@ -140,6 +188,9 @@ class CameraPanel(ttk.Frame):
         landmarks = payload["landmarks"]
         feature_vector = payload["feature_vector"]
 
+        if landmarks is not None:
+            self._landmark_history.append(landmarks)
+
         self.frame_index += 1
         if self.frame_index % self.classify_every == 0:
             self._push_for_classification(feature_vector, landmarks)
@@ -147,7 +198,32 @@ class CameraPanel(ttk.Frame):
         self._poll_prediction()
         stable_prediction = self._smoothed_prediction()
 
+        motion_override = self._motion_jz_override()
+        if motion_override is not None and motion_override.confidence >= stable_prediction.confidence:
+            stable_prediction = motion_override
+
         state = self.builder.update(stable_prediction.label, stable_prediction.confidence)
+
+        if self.debug_runtime and feature_vector is not None and self.frame_index - self._last_debug_frame >= 10:
+            stats = feature_stats(np.asarray(feature_vector, dtype=np.float32))
+            raw = self._current_prediction
+            LOGGER.info(
+                "rt frame=%d raw=%s(%.3f) smooth=%s(%.3f) f[min=%.4f max=%.4f mean=%.4f std=%.4f]",
+                self.frame_index,
+                raw.label,
+                float(raw.confidence),
+                stable_prediction.label,
+                float(stable_prediction.confidence),
+                stats["min"],
+                stats["max"],
+                stats["mean"],
+                stats["std"],
+            )
+            self._last_debug_frame = self.frame_index
+
+        if self.save_uncertain and stable_prediction.confidence < 0.5 and self.frame_index % 15 == 0:
+            path = os.path.join(self.debug_frame_dir, f"frame_{self.frame_index:06d}.jpg")
+            cv2.imwrite(path, frame)
 
         if self.on_label and stable_prediction.label != self._last_label:
             self.on_label(stable_prediction.label)

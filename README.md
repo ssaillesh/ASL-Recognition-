@@ -42,9 +42,12 @@ pip install 'mediapipe==0.10.14'
 ## Usage
 Run the desktop application:
 ```bash
-cd '/Users/saillesh/Desktop/Hand Gesture/Interactive-Hand-Gesture-Recognition'
-.venv/bin/python -m sign_language_app.main
+source /Users/saillesh/Desktop/ALS/.venv/bin/activate
+cd /Users/saillesh/Desktop/ALS/ASL-Recognition-
+python -m sign_language_app.main
 ```
+
+The application opens a Tkinter window and keeps running until you close the window.
 
 Train a model from an existing landmark CSV (`label,f0...f41`):
 ```bash

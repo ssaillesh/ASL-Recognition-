@@ -312,7 +312,12 @@ def train_model(config: TrainingConfig, split_strategy: str = "random") -> None:
         random_state=42,
     )
 
-    model = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)
+    model = RandomForestClassifier(
+        n_estimators=300,
+        random_state=42,
+        n_jobs=-1,
+        class_weight="balanced_subsample",
+    )
     model.fit(X_train, y_train)
 
     preds = model.predict(X_test)

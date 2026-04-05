@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from importlib import import_module
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 from sign_language_app.classifier import ASLClassifier, PredictionResult
@@ -16,7 +16,7 @@ Point = Tuple[float, float]
 class WebGestureAnalyzer:
     def __init__(self, model_path: str) -> None:
         self.classifier = ASLClassifier(model_path)
-        self.mp_hands = mp.solutions.hands
+        self.mp_hands = cast(Any, import_module("mediapipe.python.solutions.hands"))
         self.hands = self.mp_hands.Hands(
             max_num_hands=1,
             min_detection_confidence=0.5,

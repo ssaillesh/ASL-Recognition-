@@ -101,6 +101,8 @@ class TestLetterCalibration(unittest.TestCase):
 
         result = CameraPanel._motion_jz_override(panel)
         self.assertIsNotNone(result)
+        if result is None:
+            self.fail("Expected Z override result")
         self.assertEqual(result.label, "Z")
 
     def test_motion_override_detects_j_like_path(self) -> None:
@@ -113,6 +115,8 @@ class TestLetterCalibration(unittest.TestCase):
 
         result = CameraPanel._motion_jz_override(panel)
         self.assertIsNotNone(result)
+        if result is None:
+            self.fail("Expected J override result")
         self.assertEqual(result.label, "J")
 
 

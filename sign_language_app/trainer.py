@@ -5,12 +5,12 @@ import csv
 import os
 import pickle
 import re
+from importlib import import_module
 from collections import Counter
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Tuple, cast
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -112,7 +112,7 @@ def _build_train_test_split(
 class LandmarkCollector:
     def __init__(self, camera_index: int = 0) -> None:
         self.cap = cv2.VideoCapture(camera_index)
-        self.mp_hands = mp.solutions.hands
+        self.mp_hands = cast(Any, import_module("mediapipe.python.solutions.hands"))
         self.hands = self.mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.6, min_tracking_confidence=0.6)
 
     def _normalize(self, points: List[Tuple[float, float]]) -> np.ndarray:

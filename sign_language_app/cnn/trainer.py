@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pickle
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix

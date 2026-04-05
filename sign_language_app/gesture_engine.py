@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import time
+from importlib import import_module
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 from sign_language_app.preprocessing import normalize_landmarks_xy
@@ -20,8 +20,8 @@ class GestureEngine:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
 
-        self.mp_hands = cast(Any, mp.solutions.hands)
-        self.mp_draw = cast(Any, mp.solutions.drawing_utils)
+        self.mp_hands = cast(Any, import_module("mediapipe.python.solutions.hands"))
+        self.mp_draw = cast(Any, import_module("mediapipe.python.solutions.drawing_utils"))
         self.hands = self.mp_hands.Hands(
             max_num_hands=1,
             min_detection_confidence=0.5,

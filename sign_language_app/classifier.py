@@ -278,6 +278,15 @@ class ASLClassifier:
         calibrated = sorted(base.items(), key=lambda item: item[1], reverse=True)[:3]
         return [(label, float(score)) for label, score in calibrated]
 
+    @staticmethod
+    def _sanitize_top3(top3: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+        cleaned: List[Tuple[str, float]] = []
+        for label, score in top3:
+            clamped = float(max(0.0, min(1.0, score)))
+            cleaned.append((label, clamped))
+        cleaned.sort(key=lambda item: item[1], reverse=True)
+        return cleaned[:3]
+
     def predict(self, feature_vector: np.ndarray, points: Sequence[Tuple[float, float]]) -> PredictionResult:
         if self.model is None and self.cnn_classifier is None:
             return self._heuristic_predict(points)
@@ -289,6 +298,7 @@ class ASLClassifier:
             top3_model = self._calibrate_ab(points, top3_model)
             # Apply U/V/R calibration
             top3_model = self._calibrate_uvr(points, top3_model)
+            top3_model = self._sanitize_top3(top3_model)
 
             if top3_model[0][1] < 0.58:
                 return PredictionResult(label="UNKNOWN", confidence=float(top3_model[0][1]), top3=top3_model)
@@ -310,6 +320,7 @@ class ASLClassifier:
         top3_model: List[Tuple[str, float]] = [(str(labels[idx]), float(probabilities[idx])) for idx in indices]
         top3_model = self._calibrate_ab(points, top3_model)
         top3_model = self._calibrate_uvr(points, top3_model)
+        top3_model = self._sanitize_top3(top3_model)
 
         # Reject unstable low-confidence outputs instead of forcing a wrong letter.
         if top3_model[0][1] < 0.58:

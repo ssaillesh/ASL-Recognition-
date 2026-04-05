@@ -151,12 +151,12 @@ class CameraPanel(ttk.Frame):
         vertical_drop = float(net[1])
         horizontal_move = float(abs(net[0]))
 
-        # Z: zig-zag path with noticeable horizontal direction changes.
-        if path_len > 0.14 and sign_changes >= 2 and horizontal_move > 0.03 and float(np.max(np.abs(dx))) > 0.01:
+        # Z: require stronger zig-zag evidence to avoid accidental overrides from jitter.
+        if path_len > 0.18 and sign_changes >= 3 and horizontal_move > 0.05 and float(np.max(np.abs(dx))) > 0.012:
             return PredictionResult(label="Z", confidence=0.86, top3=[("Z", 0.86), ("UNKNOWN", 0.14)])
 
-        # J: downward hook-like motion. Webcam is mirrored, so be tolerant to direction.
-        if path_len > 0.12 and vertical_drop > 0.04 and horizontal_move > 0.01:
+        # J: downward hook-like motion. Keep the threshold conservative to reduce false positives.
+        if path_len > 0.16 and vertical_drop > 0.06 and horizontal_move > 0.015:
             return PredictionResult(label="J", confidence=0.84, top3=[("J", 0.84), ("UNKNOWN", 0.16)])
 
         return None
@@ -199,7 +199,12 @@ class CameraPanel(ttk.Frame):
         stable_prediction = self._smoothed_prediction()
 
         motion_override = self._motion_jz_override()
-        if motion_override is not None and motion_override.confidence >= stable_prediction.confidence:
+        allow_motion_override = stable_prediction.label in {"J", "Z"} or stable_prediction.confidence < 0.68
+        if (
+            motion_override is not None
+            and allow_motion_override
+            and motion_override.confidence >= stable_prediction.confidence
+        ):
             stable_prediction = motion_override
 
         state = self.builder.update(stable_prediction.label, stable_prediction.confidence)

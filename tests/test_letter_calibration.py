@@ -22,7 +22,7 @@ class TestLetterCalibration(unittest.TestCase):
         points[3] = (0.47, 0.53)
         points[4] = (0.49, 0.51)
 
-        top3 = [("T", 0.91), ("A", 0.09), ("B", 0.01)]
+        top3 = [("T", 0.41), ("A", 0.39), ("B", 0.01)]
         calibrated = ASLClassifier._calibrate_ab(clf, points, top3)
 
         self.assertEqual(calibrated[0][0], "A")
@@ -37,7 +37,7 @@ class TestLetterCalibration(unittest.TestCase):
         points[3] = (0.47, 0.53)
         points[4] = (0.49, 0.51)
 
-        top3 = [("D", 0.91), ("B", 0.05), ("A", 0.04)]
+        top3 = [("D", 0.43), ("B", 0.40), ("A", 0.04)]
         calibrated = ASLClassifier._calibrate_ab(clf, points, top3)
 
         self.assertEqual(calibrated[0][0], "B")
@@ -84,7 +84,17 @@ class TestLetterCalibration(unittest.TestCase):
     def test_motion_override_detects_z_like_path(self) -> None:
         panel = object.__new__(CameraPanel)
         panel._landmark_history = deque(maxlen=12)
-        for x, y in ((0.10, 0.10), (0.18, 0.10), (0.26, 0.16), (0.18, 0.22), (0.10, 0.28), (0.18, 0.34), (0.28, 0.34), (0.36, 0.34)):
+        for x, y in (
+            (0.10, 0.10),
+            (0.21, 0.10),
+            (0.30, 0.15),
+            (0.20, 0.20),
+            (0.10, 0.26),
+            (0.22, 0.30),
+            (0.33, 0.34),
+            (0.20, 0.38),
+            (0.18, 0.42),
+        ):
             pts = [(0.5, 0.5) for _ in range(21)]
             pts[8] = (x, y)
             panel._landmark_history.append(pts)
